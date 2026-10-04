@@ -1,8 +1,17 @@
 # 🐾 Chico of Duty
 
 FPS 3D multiplayer no navegador em que os soldados são gatinhos. Team Deathmatch
-(Laranjas vs Pretos, 25 abates) na "Sala de Estar Proibida", com bots de IA
-preenchendo as vagas. *Bravo Six, going meow.*
+(Laranjas vs Pretos, 25 abates) com bots de IA preenchendo as vagas.
+*Bravo Six, going meow.*
+
+## Mapas
+
+Os mapas se alternam a cada partida:
+
+- **Sala de Estar Proibida**: sala gigante em escala de gato (sofá, estante, bunkers de papelão).
+- **Shipment**: convés de cargueiro pequeno e caótico, inspirado no clássico do CoD 4.
+  Grade 3×3 de contêineres; os do meio e das laterais têm as portas abertas e dá para
+  atravessar por dentro. Os caixotes servem de degrau para subir nos contêineres.
 
 ## Rodando
 
@@ -22,7 +31,7 @@ npm start
 ```
 
 Variáveis: `PORT` (porta do servidor em produção), `SERVER_PORT` (porta do servidor no
-`npm run dev`, se a 3000 estiver ocupada). `?debug` na URL dispensa o Pointer Lock
+`npm run dev`, se a 3000 estiver ocupada), `MAP` (mapa inicial: `sala` ou `shipment`), `BOTS=0` (sem bots: só humanos). `?debug` na URL dispensa o Pointer Lock
 (útil em navegadores embutidos).
 
 ## Testes
@@ -43,6 +52,9 @@ o jogo publica métricas de renderização em `document.body.dataset.stats`.
 - **ADS** reduz a velocidade para 60%; ao sair da corrida há 150 ms antes de atirar.
 - **Killstreak "Drone Pombo"**: 3 abates sem morrer revelam os inimigos no radar do
   time por 12 s.
+- **Killstreak "Bombardeio de Pombos"**: 5 abates sem morrer. Aperte **4** para abrir o
+  mapa tático e escolher o alvo; um bando cruza o mapa soltando 6 bombas. Todos veem a
+  área de perigo no chão (verde = aliado, vermelho = inimigo) antes do impacto.
 - **Morte**: mostra a vida restante de quem te abateu e a distância. Fim de partida
   mostra o MVP.
 - Análise completa e backlog: [docs/ANALISE_FPS.md](docs/ANALISE_FPS.md).
@@ -59,6 +71,7 @@ o jogo publica métricas de renderização em `document.body.dataset.stats`.
 | R | recarregar |
 | 1 2 3 / roda | Meow-4A1 · Purr-Pump · Cat-98k |
 | V / botão lateral | patada tática |
+| 4 | Bombardeio de Pombos (mapa de alvo: clique confirma, 4 / botão direito cancela) |
 | Z + 1–6 | rádio tático do esquadrão |
 | Tab | placar |
 
@@ -68,7 +81,7 @@ Agachado, parado e sem levar dano por 2,5 s, o gato **ronrona** e recupera vida.
 
 ```
 shared/      código comum a cliente e servidor
-  map.ts       geometria do mapa (AABBs espelhados por time) e spawns
+  map.ts       geometria dos mapas (AABBs espelhados por time), spawns e rotação
   sim.ts       física de movimento determinística + raycast/hitboxes
   weapons.ts   atributos das armas
   types.ts     protocolo de rede (JSON)
@@ -81,7 +94,7 @@ client/      Three.js + Vite
   src/main.ts        loop, predição a 60 Hz + reconciliação, efeitos
   src/Network.ts     relógio do servidor e interpolação (100 ms)
   src/Viewmodel.ts   patinhas em 1ª pessoa, ADS, recuo, recarga
-  src/MapBuilder.ts  sala com texturas procedurais
+  src/MapBuilder.ts  sala e Shipment com texturas procedurais
   src/CatModel.ts    gatos em 3ª pessoa
   src/Audio.ts       Web Audio: samples de /sfx com síntese procedural de reserva
 ```

@@ -19,6 +19,7 @@ export class HUD {
     scope: $('scope'), death: $('death'), deathBy: $('death-by'), deathTimer: $('death-timer'),
     scoreboard: $('scoreboard'), radioMenu: $('radio-menu'), end: $('end-screen'), endTitle: $('end-title'), endSub: $('end-sub'),
     compassStrip: $('compass-strip'), uav: $('uav'), uavTime: $('uav-time'), endMvp: $('end-mvp'),
+    strikeReady: $('strike-ready'), strikeCount: $('strike-count'),
   };
   private radar = $<HTMLCanvasElement>('radar').getContext('2d')!;
   private dmgDirAngle = 0;
@@ -66,7 +67,7 @@ export class HUD {
     hp: number; stamina: number; purring: boolean; weapon: WeaponId; ammo: number; reloading: boolean;
     yaw: number; score: Record<Team, number>; timeLeft: number; ads: number; spread: number;
     me: { x: number; z: number; team: Team; id: number };
-    players: NetPlayer[]; noisy: Map<number, number>; now: number; uav: number;
+    players: NetPlayer[]; noisy: Map<number, number>; now: number; uav: number; airstrikes: number;
   }): void {
     const e = this.el;
     const hpPct = Math.max(0, (s.hp / MAX_HP) * 100);
@@ -109,6 +110,8 @@ export class HUD {
     this.updateCompass(s.yaw);
     e.uav.classList.toggle('hidden', s.uav <= 0);
     if (s.uav > 0) e.uavTime.textContent = String(Math.ceil(s.uav));
+    e.strikeReady.classList.toggle('hidden', s.airstrikes <= 0);
+    e.strikeCount.textContent = s.airstrikes > 1 ? `×${s.airstrikes}` : '';
     this.drawRadar(s);
   }
 

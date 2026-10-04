@@ -1,7 +1,7 @@
 // Física autoritária: resolução de tiros (raycast contra mapa + hitboxes com
 // compensação de lag), linha de visão e malha de pontos de navegação dos bots.
 
-import { ROOM } from '../shared/map.ts';
+import { MAP, ROOM, type MapId } from '../shared/map.ts';
 import { collides, eyeY, hitboxes, rayAabb, rayWorld, STAND_H } from '../shared/sim.ts';
 import type { HistoryEntry, Player } from './types.ts';
 
@@ -78,8 +78,12 @@ export function lineOfSight(a: readonly number[], b: readonly number[]): boolean
   return rayWorld(a[0], a[1], a[2], dx / len, dy / len, dz / len, len) >= len - 0.05;
 }
 
-/** Grade de pontos livres no chão para a navegação dos bots. */
-export const NAV_POINTS: [number, number][] = (() => {
+const navCache = new Map<MapId, [number, number][]>();
+
+/** Grade de pontos livres no chão do mapa ativo para a navegação dos bots. */
+export function navPoints(): [number, number][] {
+  const cached = navCache.get(MAP.id);
+  if (cached) return cached;
   const pts: [number, number][] = [];
   for (let x = ROOM.minX + 2; x <= ROOM.maxX - 2; x += 3) {
     for (let z = ROOM.minZ + 2; z <= ROOM.maxZ - 2; z += 3) {
@@ -90,5 +94,6 @@ export const NAV_POINTS: [number, number][] = (() => {
       }
     }
   }
+  navCache.set(MAP.id, pts);
   return pts;
-})();
+}

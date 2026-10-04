@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 import { burstReset, RIFLE_SPRAY_YAW, spreadFor, WEAPONS, type WeaponDef, type WeaponId } from '../../shared/weapons.ts';
-import { audio } from './Audio.ts';
+import { audio, WEAPON_SFX } from './Audio.ts';
 import type { Input } from './Input.ts';
 import type { Network } from './Network.ts';
 import type { Viewmodel } from './Viewmodel.ts';
@@ -92,7 +92,6 @@ export class WeaponManager {
     if (inp.consume('Digit1')) this.select(0);
     if (inp.consume('Digit2')) this.select(1);
     if (inp.consume('Digit3')) this.select(2);
-    if (inp.consume('Digit4')) this.select(3);
     const wheel = inp.consumeWheel();
     if (wheel) this.select((((this.current + wheel) % 3) + 3) % 3 as WeaponId);
     if (inp.consume('KeyR')) this.reload();
@@ -140,8 +139,8 @@ export class WeaponManager {
 
     this.net.send({ t: 'shoot', w: this.current, dx: fwd.x, dy: fwd.y, dz: fwd.z, ads, rt: this.net.renderTime() });
     this.vm.onFire();
-    const names = ['rifle', 'pump', 'sniper', 'melee'] as const;
-    audio.play(names[this.current], { volume: this.current === 3 ? 0.8 : 0.9 });
+    const sfx = WEAPON_SFX[this.current];
+    if (sfx) audio.play(sfx, { volume: this.current === 3 ? 0.8 : 0.9 });
     if (this.current === 1) audio.play('rack');
     if (this.current === 2) audio.play('bolt');
     // Recuo: o fuzil segue um padrão fixo (dá para aprender a compensar, como no CS);

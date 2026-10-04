@@ -153,11 +153,44 @@ export class Effects {
     t.mesh.visible = true;
   }
 
-  flashLight(pos: THREE.Vector3, intensity: number): void {
+  flashLight(pos: THREE.Vector3, intensity: number, distance = 9, life = 0.06): void {
     const slot = this.lights.reduce((a, b) => (a.life < b.life ? a : b));
     slot.light.position.copy(pos);
     slot.light.intensity = intensity;
-    slot.life = 0.06;
+    slot.light.distance = distance;
+    slot.life = life;
+  }
+
+  /** Explosão de bomba de pombo: clarão, bola de fogo, fumaça, faíscas, penas e marca no chão. */
+  explosion(point: THREE.Vector3): void {
+    this.flashLight(tmpP.copy(point).setY(point.y + 1), 400, 26, 0.3);
+    for (let i = 0; i < 18; i++) {
+      const s = this.sparks.take();
+      s.active = true;
+      s.mesh.position.copy(point);
+      s.vel.set((Math.random() - 0.5) * 16, 4 + Math.random() * 10, (Math.random() - 0.5) * 16);
+      s.mesh.lookAt(tmpS.copy(point).add(s.vel));
+      s.life = s.max = 0.3 + Math.random() * 0.3;
+      s.mesh.scale.setScalar(1.6);
+      s.mesh.visible = true;
+    }
+    for (let i = 0; i < 7; i++) {
+      this.puff(tmpS.copy(point).add(new THREE.Vector3((Math.random() - 0.5) * 0.8, 0.4 + Math.random() * 0.5, (Math.random() - 0.5) * 0.8)),
+        new THREE.Vector3((Math.random() - 0.5) * 3, 1.5 + Math.random() * 2, (Math.random() - 0.5) * 3),
+        { life: 0.45, base: 0.9 + Math.random() * 0.5, grow: 2.5, gravity: -1, alpha: 0.95, color: i % 2 ? 0xffb040 : 0xff6a20 });
+    }
+    for (let i = 0; i < 9; i++) {
+      this.puff(tmpS.copy(point).add(new THREE.Vector3((Math.random() - 0.5) * 1.5, 0.3 + Math.random(), (Math.random() - 0.5) * 1.5)),
+        new THREE.Vector3((Math.random() - 0.5) * 2.5, 1 + Math.random() * 1.5, (Math.random() - 0.5) * 2.5),
+        { life: 1.8 + Math.random() * 0.6, base: 1.0 + Math.random() * 0.6, grow: 3.2, gravity: -0.6, alpha: 0.75, color: 0x5a5550 });
+    }
+    // Penas: o bando não economiza nas plumas
+    for (let i = 0; i < 10; i++) {
+      this.puff(tmpS.copy(point).setY(point.y + 1.2), new THREE.Vector3((Math.random() - 0.5) * 6, 2 + Math.random() * 4, (Math.random() - 0.5) * 6), {
+        life: 1.6, base: 0.14, grow: 0.3, gravity: 1.5, alpha: 1, color: i % 3 ? 0xd8dde3 : 0x7d8796,
+      });
+    }
+    this.decal(point, tmpP.set(0, 1, 0), 9);
   }
 
   private puff(pos: THREE.Vector3, vel: THREE.Vector3, o: { life: number; base: number; grow: number; gravity: number; alpha: number; color: number }): void {
@@ -207,16 +240,22 @@ export class Effects {
     }
   }
 
-  private decal(point: THREE.Vector3, n: THREE.Vector3): void {
-    tmpP.copy(point).addScaledVector(n, 0.012);
+  private decal(point: THREE.Vector3, n: THREE.Vector3, scale = 1): void {
     tmpQ.setFromUnitVectors(UP_Z, n);
+    tmpP.copy(point).addScaledVector(n, 0.012);
     tmpQ.multiply(new THREE.Quaternion().setFromAxisAngle(UP_Z, Math.random() * Math.PI * 2));
-    const sc = 0.8 + Math.random() * 0.5;
+    const sc = (0.8 + Math.random() * 0.5) * scale;
     tmpM.compose(tmpP, tmpQ, tmpS.set(sc, sc, sc));
     this.decals.setMatrixAt(this.decalNext, tmpM);
     this.decalNext = (this.decalNext + 1) % MAX_DECALS;
     this.decals.count = Math.min(MAX_DECALS, this.decals.count + 1);
     this.decals.instanceMatrix.needsUpdate = true;
+  }
+
+  /** Apaga as marcas de bala (troca de mapa). */
+  clearDecals(): void {
+    this.decals.count = 0;
+    this.decalNext = 0;
   }
 
   update(dt: number): void {

@@ -10,6 +10,10 @@ export class Input {
   clicks = 0;
   rightDown = false;
   locked = false;
+  /** Mapa de alvo aberto: o mouse move um cursor (cursorDX/DY) em vez da câmera. */
+  cursorMode = false;
+  cursorDX = 0;
+  cursorDY = 0;
   private pressed = new Set<string>();
   private wheel = 0;
   private recoilPitch = 0;
@@ -29,6 +33,7 @@ export class Input {
 
     addEventListener('mousemove', (e) => {
       if (!this.locked) return;
+      if (this.cursorMode) { this.cursorDX += e.movementX; this.cursorDY += e.movementY; return; }
       this.yaw -= e.movementX * this.sensitivity * this.sensScale;
       this.pitch -= e.movementY * this.sensitivity * this.sensScale;
       this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch));

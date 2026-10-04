@@ -58,6 +58,7 @@ export interface Player {
   lastShot: number;
   burst: number; // tiros seguidos (bloom)
   streak: number; // abates sem morrer
+  airstrikes: number; // bombardeios de pombos guardados
   lastDamage: number;
   purring: boolean;
   queue: InputCmd[];

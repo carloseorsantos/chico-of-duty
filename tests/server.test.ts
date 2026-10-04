@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
+import { MAP } from '../shared/map.ts';
 import { newState, STAND_EYE } from '../shared/sim.ts';
 import { SCORE_LIMIT, TEAM_SIZE, UAV_STREAK, type ServerMsg, type Team } from '../shared/types.ts';
 import { burstReset, spreadFor, WEAPONS } from '../shared/weapons.ts';
@@ -208,6 +209,16 @@ test('bots completam 4v4 e cedem vaga a humanos', () => {
   assert.equal(count('orange', true), TEAM_SIZE - 2);
 });
 
+test('sem bots (BOTS=0): só os humanos ficam na partida', () => {
+  const g = new GameManager({ bots: false });
+  g.join(fakeWs([]), 'Eu', 'laranja', 'auto');
+  g.join(fakeWs([]), 'Amigo', 'laranja', 'auto');
+  const list = [...g.players.values()];
+  assert.equal(list.length, 2);
+  assert.ok(list.every((p) => !p.isBot));
+  assert.notEqual(list[0].team, list[1].team, 'um em cada time');
+});
+
 test('fumaça: 60 s de partida só com bots — combate acontece e ninguém sai do mapa', () => {
   const g = new GameManager();
   g.join(fakeWs([]), 'Espectador', 'laranja', 'orange');
@@ -223,4 +234,95 @@ test('fumaça: 60 s de partida só com bots — combate acontece e ninguém sai 
     }
   }
   assert.ok(kills >= 5, `abates em 60 s: ${kills}`);
+});
+
+test('rotação de mapas: welcome informa o mapa e cada nova partida troca para o próximo', () => {
+  const { g, join, tick } = setup();
+  const a = join('Rotação', 'orange');
+  const v = join('Alvo', 'black').p;
+  const welcome = a.msgs.find((m) => m.t === 'welcome') as Extract<ServerMsg, { t: 'welcome' }>;
+  assert.equal(welcome.map, 'sala');
+  g.score.orange = SCORE_LIMIT - 1;
+  place(a.p, 0, -6, Math.PI);
+  place(v, 0, 0);
+  shoot(g, a.p, 2, [0, 0.62, -0.36]);
+  tick(10_500);
+  const start = a.msgs.find((m) => m.t === 'start') as Extract<ServerMsg, { t: 'start' }>;
+  assert.equal(start.map, 'shipment');
+  assert.equal(g.mapId, 'shipment');
+  assert.equal(MAP.id, 'shipment');
+  // Todo mundo renasceu num spawn do Shipment
+  for (const p of [a.p, v]) assert.ok(MAP.spawns[p.team].some((sp) => sp[0] === p.st.x && sp[2] === p.st.z), `${p.name} fora dos spawns`);
+});
+
+test('fumaça no Shipment: 60 s só com bots — combate acontece e ninguém sai do convés', () => {
+  const g = new GameManager({ map: 'shipment' });
+  g.join(fakeWs([]), 'Espectador', 'laranja', 'orange');
+  let kills = 0;
+  const orig = g.broadcast.bind(g);
+  g.broadcast = (m: ServerMsg) => { if (m.t === 'kill') kills++; orig(m); };
+  for (let i = 0; i < 60 * 30; i++) {
+    now += 1000 / 30;
+    (g as unknown as { tick(): void }).tick();
+    for (const p of g.players.values()) {
+      assert.ok(Number.isFinite(p.st.x + p.st.y + p.st.z), `${p.name} com posição inválida`);
+      assert.ok(Math.abs(p.st.x) < 20 && Math.abs(p.st.z) < 20 && p.st.y >= 0 && p.st.y < 22, `${p.name} fora do mapa`);
+    }
+  }
+  assert.ok(kills >= 5, `abates em 60 s: ${kills}`);
+});
+
+// ── Bombardeio de Pombos ────────────────────────────────────────────────────
+
+test('bombardeio: 5 abates seguidos dão um bombardeio (além do drone aos 3)', () => {
+  const { g, join } = setup();
+  const a = join('Sniper', 'orange');
+  place(a.p, 0, -6, Math.PI);
+  for (let i = 0; i < 5; i++) {
+    const v = join(`V${i}`, 'black').p;
+    place(v, 0, 0);
+    shoot(g, a.p, 2, [0, 0.62, -0.36]);
+    assert.equal(v.alive, false);
+    v.st.x = 30;
+    now += 1400;
+  }
+  assert.equal(a.p.airstrikes, 1);
+  assert.ok(a.msgs.some((m) => m.t === 'streak' && m.kind === 'airstrike'));
+});
+
+test('bombardeio: avisa todos, espera o atraso e só fere inimigos no raio', () => {
+  const { g, join, tick } = setup();
+  const a = join('Chamador', 'orange');
+  const near = join('Perto', 'black').p;
+  const far = join('Longe', 'black').p;
+  const ally = join('Aliado', 'orange').p;
+  place(a.p, -25, 13);
+  place(near, 0, 13);
+  place(far, 0, -12);
+  place(ally, 0.5, 13);
+  a.p.airstrikes = 1;
+  assert.ok(g.callAirstrike(a.p, 0, 13));
+  const msg = a.msgs.find((m) => m.t === 'airstrike') as Extract<ServerMsg, { t: 'airstrike' }>;
+  assert.equal(msg.points.length, 6);
+  assert.deepEqual(msg.dir, [1, 0], 'Laranjas bombardeiam em direção aos Pretos');
+  tick(1000);
+  assert.equal(near.hp, 100, 'nada explode durante o aviso');
+  tick(3000);
+  assert.equal(near.alive, false, 'inimigo no raio abatido');
+  assert.equal(far.hp, 100, 'inimigo fora do raio intacto');
+  assert.equal(ally.hp, 100, 'sem fogo amigo');
+  const kill = a.msgs.find((m) => m.t === 'kill') as Extract<ServerMsg, { t: 'kill' }>;
+  assert.equal(WEAPONS[kill.w].name, 'Bombardeio de Pombos');
+  assert.equal(a.p.streak, 0, 'abates do bombardeio não contam para killstreak');
+});
+
+test('bombardeio: sem carga não chama, e não dá para empunhar/atirar com ele', () => {
+  const { g, join } = setup();
+  const a = join('Esperto', 'orange');
+  place(a.p, 0, 0);
+  assert.equal(g.callAirstrike(a.p, 0, 0), false);
+  g.handle(a.p, { t: 'switch', w: 4 });
+  assert.notEqual(a.p.weapon, 4);
+  g.handle(a.p, { t: 'shoot', w: 4, dx: 0, dy: 0, dz: -1, ads: false, rt: now });
+  assert.equal(a.msgs.filter((m) => m.t === 'airstrike').length, 0);
 });

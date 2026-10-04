@@ -4,7 +4,7 @@
 import { eyeY, type InputCmd } from '../shared/sim.ts';
 import { TICK_RATE } from '../shared/types.ts';
 import { WEAPONS, type WeaponId } from '../shared/weapons.ts';
-import { lineOfSight, NAV_POINTS } from './Physics.ts';
+import { lineOfSight, navPoints } from './Physics.ts';
 import type { BotBrain, Player } from './types.ts';
 
 export const BOT_NAMES = [
@@ -179,10 +179,11 @@ export function thinkBot(bot: Player, players: Player[], now: number): BotAction
 function pickWaypoint(bot: Player, players: Player[]): [number, number] {
   // Prefere pontos na direção dos inimigos vivos, com bastante aleatoriedade
   const enemies = players.filter((p) => p.alive && p.team !== bot.team);
-  let best = NAV_POINTS[(Math.random() * NAV_POINTS.length) | 0];
+  const nav = navPoints();
+  let best = nav[(Math.random() * nav.length) | 0];
   let bestScore = -Infinity;
   for (let i = 0; i < 8; i++) {
-    const c = NAV_POINTS[(Math.random() * NAV_POINTS.length) | 0];
+    const c = nav[(Math.random() * nav.length) | 0];
     let score = Math.random() * 20;
     if (enemies.length) {
       const e = enemies[(Math.random() * enemies.length) | 0];
