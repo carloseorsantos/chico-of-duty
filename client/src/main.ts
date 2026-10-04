@@ -5,15 +5,18 @@ import * as THREE from 'three';
 import { copyState, eyeY, newState, rayWorld, rayWorldHit, stepPlayer, type InputCmd, type PState } from '../../shared/sim.ts';
 import { RADIO_LINES, type NetPlayer, type ServerMsg, type Skin, type Team } from '../../shared/types.ts';
 import { MAX_HP, WEAPONS } from '../../shared/weapons.ts';
-import { audio } from './Audio.ts';
+import { AirstrikeFx, loadPigeon } from './Airstrike.ts';
+import { audio, WEAPON_SFX } from './Audio.ts';
 import { CatModel, FUR, TEAM_ACCENT } from './CatModel.ts';
 import { Effects } from './Effects.ts';
 import { loadCatAsset } from './CatAsset.ts';
 import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 import { HUD } from './HUD.ts';
 import { Input } from './Input.ts';
-import { buildMap } from './MapBuilder.ts';
+import { buildMap, type BuiltMap } from './MapBuilder.ts';
+import { MAP, MAPS, setMap, type MapId } from '../../shared/map.ts';
 import { Network } from './Network.ts';
+import { StrikeMap } from './StrikeMap.ts';
 import { Viewmodel } from './Viewmodel.ts';
 import { WeaponManager } from './WeaponManager.ts';
 
@@ -32,16 +35,25 @@ renderer.autoClear = false;
 renderer.info.autoReset = false; // somamos mundo + viewmodel por frame
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x2a2118);
-scene.fog = new THREE.Fog(0x3a2e22, 60, 140);
 const camera = new THREE.PerspectiveCamera(baseFov, 1, 0.05, 300);
 camera.rotation.order = 'YXZ';
 scene.add(camera);
-buildMap(scene);
+let world: BuiltMap = buildMap(scene, MAP);
 // O mapa é estático: a sombra do sol é renderizada uma única vez (os gatos usam
 // sombra-blob). Economiza um passe inteiro de sombra por frame.
 renderer.shadowMap.autoUpdate = false;
 renderer.shadowMap.needsUpdate = true;
+
+/** Troca o mapa (o servidor avisa no welcome e a cada nova partida). */
+function switchMap(id: MapId): void {
+  if (!MAPS[id] || MAP.id === id) return;
+  world.dispose();
+  setMap(id);
+  world = buildMap(scene, MAP);
+  renderer.shadowMap.needsUpdate = true;
+  fx.clearDecals();
+  airFx.clear();
+}
 
 // Assets externos (CC0): gato animado e HDRI de sala de estar para luz/reflexos
 // O botão "Entrar" só libera quando o gato e o HDRI carregaram (ou após 8 s, com
@@ -101,6 +113,7 @@ let timeLeft = 600;
 let phase: 'playing' | 'ended' = 'playing';
 let latestPlayers: NetPlayer[] = [];
 let respawnIn = 0;
+let airstrikes = 0; // bombardeios guardados (killstreak de 5 abates)
 let killerId: number | null = null;
 const deathPos = new THREE.Vector3();
 let deathBy = '';
@@ -116,6 +129,26 @@ const catState = new Map<number, { stepPhase: number; fur: number }>();
 const fx = new Effects(scene);
 let shake = 0; // tremida de câmera ao atirar
 const clawEl = document.getElementById('claw')!;
+
+// ── Bombardeio de Pombos ─────────────────────────────────────────────────
+void loadPigeon().catch((err) => console.warn('Pombo GLB indisponível, usando o procedural:', err));
+const airFx = new AirstrikeFx(scene, fx, (pos) => {
+  // Explosão perto treme a câmera
+  const d = camera.position.distanceTo(pos);
+  if (d < 14) shake = Math.max(shake, 1.8 * (1 - d / 14));
+});
+const strikeMap = new StrikeMap();
+let strikeRightHeld = false; // botão direito já estava apertado (ADS) ao abrir o mapa
+
+function setStrikeMap(on: boolean): void {
+  if (on === strikeMap.open) return;
+  strikeMap.show(on, { x: pred.x + (myTeam === 'orange' ? 12 : -12), z: pred.z });
+  input.cursorMode = on;
+  input.cursorDX = input.cursorDY = 0;
+  input.clicks = 0;
+  strikeRightHeld = input.rightDown;
+  if (on) audio.play('radio', { volume: 0.6 });
+}
 
 // ── Lobby ────────────────────────────────────────────────────────────────
 const lobby = document.getElementById('lobby')!;
@@ -215,10 +248,11 @@ net.onMessage = (msg: ServerMsg) => {
     case 'welcome':
       myId = msg.id;
       myTeam = msg.team;
+      switchMap(msg.map);
       inGame = true;
       lobby.classList.add('hidden');
       hud.show(true);
-      hud.center('TEAM DEATHMATCH', `Esquadrão ${myTeam === 'orange' ? 'Laranja' : 'Preto'} · 25 abates`, 3000);
+      hud.center('TEAM DEATHMATCH', `${MAP.name} · Esquadrão ${myTeam === 'orange' ? 'Laranja' : 'Preto'} · 25 abates`, 3000);
       setTimeout(() => { audio.radio(0); hud.radio('QG', 0); }, 800);
       break;
     case 'snap':
@@ -227,8 +261,8 @@ net.onMessage = (msg: ServerMsg) => {
     case 'shot': {
       noisy.set(msg.id, performance.now());
       const o = new THREE.Vector3(msg.o[0], msg.o[1], msg.o[2]);
-      const names = ['rifle', 'pump', 'sniper', 'melee'] as const;
-      audio.play(names[msg.w], { pos: { x: o.x, y: o.y, z: o.z }, volume: 0.9 });
+      const sfx = WEAPON_SFX[msg.w];
+      if (sfx) audio.play(sfx, { pos: { x: o.x, y: o.y, z: o.z }, volume: 0.9 });
       // O gato que atirou mostra clarão e recuo; traçantes saem do cano dele
       const shooter = cats.get(msg.id);
       shooter?.fire(msg.w);
@@ -278,9 +312,21 @@ net.onMessage = (msg: ServerMsg) => {
       audio.radio(msg.id);
       break;
     case 'streak':
-      if (msg.id === myId) hud.center('KILLSTREAK: DRONE POMBO', `Inimigos revelados no radar por ${msg.seconds}s`, 2500);
+      if (msg.kind === 'airstrike') {
+        // Bombardeio guardado: só o dono é avisado (o aviso geral vem quando ele chama)
+        if (msg.id !== myId) break;
+        hud.center('KILLSTREAK: BOMBARDEIO DE POMBOS', 'Aperte 4 para escolher o alvo', 3000);
+        audio.play('coo');
+      } else if (msg.id === myId) hud.center('KILLSTREAK: DRONE POMBO', `Inimigos revelados no radar por ${msg.seconds}s`, 2500);
       else if (msg.team === myTeam) hud.center('DRONE POMBO NO AR', `${msg.name} revelou os inimigos`, 2200);
       else hud.center('DRONE INIMIGO!', 'Você aparece no radar deles — mova-se!', 2200);
+      audio.play('radio');
+      break;
+    case 'airstrike':
+      airFx.start(msg, myTeam);
+      if (msg.id === myId) hud.center('BOMBARDEIO A CAMINHO', 'O bando está chegando. Bravo Six, going coo.', 2500);
+      else if (msg.team === myTeam) hud.center('BOMBARDEIO ALIADO', `${msg.name} chamou o bando — fique longe do verde`, 2500);
+      else hud.center('BOMBARDEIO INIMIGO!', 'Saia da área vermelha!', 3000);
       audio.play('radio');
       break;
     case 'end':
@@ -290,8 +336,11 @@ net.onMessage = (msg: ServerMsg) => {
       break;
     case 'start':
       phase = 'playing';
+      switchMap(msg.map);
+      airFx.clear();
+      setStrikeMap(false);
       hud.setEnd(false);
-      hud.center('NOVA PARTIDA', 'Bravo Six, going meow.', 2500);
+      hud.center('NOVA PARTIDA', `${MAP.name} · Bravo Six, going meow.`, 2500);
       audio.radio(0);
       break;
     case 'info':
@@ -314,6 +363,7 @@ function onSnapshot(msg: Extract<ServerMsg, { t: 'snap' }>): void {
   if (!self || !msg.me) return;
   const me = msg.me;
   respawnIn = me.respawnIn;
+  airstrikes = me.as ?? 0;
   hp = self.hp;
   purring = self.pu;
   myTeam = self.tm;
@@ -430,8 +480,27 @@ function frame(): void {
       wasOnGround = pred.onGround;
       wasSliding = pred.slide > 0;
 
+      // Bombardeio: 4 abre o mapa de alvo; clique confirma; 4 / botão direito cancela
+      if (input.consume('Digit4') && !radioOpen) {
+        if (strikeMap.open) setStrikeMap(false);
+        else if (airstrikes > 0 && phase === 'playing') setStrikeMap(true);
+        else hud.toast('Bombardeio de Pombos: 5 abates seguidos sem morrer');
+      }
+      if (strikeMap.open) {
+        strikeMap.moveCursor(input.cursorDX, input.cursorDY);
+        input.cursorDX = input.cursorDY = 0;
+        if (!input.rightDown) strikeRightHeld = false;
+        if ((input.rightDown && !strikeRightHeld) || phase !== 'playing' || airstrikes <= 0 || !input.locked) setStrikeMap(false);
+        else if (input.clicks > 0) {
+          net.send({ t: 'airstrike', x: Math.round(strikeMap.x * 100) / 100, z: Math.round(strikeMap.z * 100) / 100 });
+          airstrikes--;
+          setStrikeMap(false);
+        }
+        strikeMap.draw({ me: { x: pred.x, z: pred.z, yaw: input.yaw, team: myTeam, id: myId }, players: latestPlayers, noisy, now, uav: uavLeft[myTeam] });
+      }
+
       // Armas
-      const canAct = input.locked && !radioOpen && phase === 'playing';
+      const canAct = input.locked && !radioOpen && !strikeMap.open && phase === 'playing';
       const shot = weapons.update(camera, canAct, speed, pred.onGround, pred.sprinting && speed > 8);
       if (shot) onLocalShot(shot.dirs, shot.weapon.melee === true);
       const adsTarget = input.rightDown && !pred.sprinting && !weapons.def.melee && !weapons.reloading ? 1 : 0;
@@ -451,6 +520,7 @@ function frame(): void {
       camera.updateProjectionMatrix();
       hud.setDeath(true, deathBy, respawnIn);
       vm.ads = 0;
+      setStrikeMap(false);
     }
 
     audio.listener = { x: camera.position.x, y: camera.position.y, z: camera.position.z, yaw: input.yaw };
@@ -463,7 +533,7 @@ function frame(): void {
       hp: alive ? hp : 0, stamina: pred.stamina, purring: alive && purring, weapon: weapons.current,
       ammo: weapons.ammo[weapons.current], reloading: weapons.reloading, yaw: input.yaw, score, timeLeft,
       ads: vm.ads, spread: d.melee ? 0 : spread, me: { x: pred.x, z: pred.z, team: myTeam, id: myId },
-      players: latestPlayers, noisy, now, uav: uavLeft[myTeam],
+      players: latestPlayers, noisy, now, uav: uavLeft[myTeam], airstrikes,
     });
     hud.setScoreboard(input.down('Tab') || phase === 'ended', latestPlayers, score, myId);
   } else {
@@ -474,6 +544,7 @@ function frame(): void {
     updateRemotes(dt, time);
   }
 
+  airFx.update(dt, now);
   fx.update(dt);
   renderer.info.reset();
   renderer.clear();

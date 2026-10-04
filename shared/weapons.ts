@@ -1,6 +1,6 @@
 // Arsenal tático felino. Valores usados pelo servidor (autoridade) e pelo cliente (feedback).
 
-export type WeaponId = 0 | 1 | 2 | 3;
+export type WeaponId = 0 | 1 | 2 | 3 | 4; // 4 = bombardeio (killstreak, não selecionável)
 
 export interface WeaponDef {
   id: WeaponId;
@@ -20,6 +20,7 @@ export interface WeaponDef {
   adsFov: number;
   recoil: number; // radianos de subida da mira por tiro
   melee?: boolean;
+  streak?: boolean; // arma de killstreak: não se escolhe nem se dispara
 }
 
 export const WEAPONS: readonly WeaponDef[] = [
@@ -39,9 +40,16 @@ export const WEAPONS: readonly WeaponDef[] = [
     id: 3, name: 'Patada Tática', short: 'PATA', damage: 60, headMult: 1.0, interval: 0.55, mag: Infinity, reload: 0,
     pellets: 1, spreadHip: 0, spreadAds: 0, range: 2.0, falloffStart: 2.0, auto: false, adsFov: 75, recoil: 0, melee: true,
   },
+  {
+    id: 4, name: 'Bombardeio de Pombos', short: 'POMBOS', damage: 150, headMult: 1, interval: 99, mag: Infinity, reload: 0,
+    pellets: 0, spreadHip: 0, spreadAds: 0, range: 0, falloffStart: 0, auto: false, adsFov: 75, recoil: 0, melee: true, streak: true,
+  },
 ];
 
 export const MAX_HP = 100;
+
+/** Bombardeio de Pombos: raio e dano (linear até a borda) de cada bomba. */
+export const AIRSTRIKE = { radius: 3.4, damage: 150, bombs: 6, spacing: 2.4, delayMs: 2500, stepMs: 160 };
 
 export interface SpreadState {
   ads: boolean;

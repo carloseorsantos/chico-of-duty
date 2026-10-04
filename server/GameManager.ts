@@ -2,13 +2,13 @@
 // dano, abates, respawn, cura por ronronado e envio de snapshots a 30 Hz.
 
 import type { WebSocket } from 'ws';
-import { SPAWNS } from '../shared/map.ts';
-import { copyState, newState, stepPlayer, type InputCmd } from '../shared/sim.ts';
+import { isMapId, MAP_ROTATION, ROOM, setMap, SPAWNS, type MapId } from '../shared/map.ts';
+import { copyState, newState, rayWorld, stepPlayer, type InputCmd } from '../shared/sim.ts';
 import {
-  MATCH_SECONDS, RADIO_LINES, RESPAWN_SECONDS, SCORE_LIMIT, SPAWN_PROTECT, TEAM_SIZE, TICK_RATE, UAV_SECONDS, UAV_STREAK,
+  AIRSTRIKE_STREAK, MATCH_SECONDS, RADIO_LINES, RESPAWN_SECONDS, SCORE_LIMIT, SPAWN_PROTECT, TEAM_SIZE, TICK_RATE, UAV_SECONDS, UAV_STREAK,
   type ClientMsg, type NetPlayer, type ServerMsg, type Skin, type Team,
 } from '../shared/types.ts';
-import { burstReset, damageAt, MAX_HP, spreadFor, WEAPONS, type WeaponId } from '../shared/weapons.ts';
+import { AIRSTRIKE, burstReset, damageAt, MAX_HP, spreadFor, WEAPONS, type WeaponId } from '../shared/weapons.ts';
 import { BOT_NAMES, newBrain, thinkBot } from './BotManager.ts';
 import { eyeOf, recordHistory, traceShot } from './Physics.ts';
 import type { Player } from './types.ts';
@@ -23,10 +23,23 @@ export class GameManager {
   phase: 'playing' | 'ended' = 'playing';
   /** Até quando o Drone Pombo de cada time revela os inimigos (ms). */
   uavUntil: Record<Team, number> = { orange: 0, black: 0 };
+  /** Bombas de pombo agendadas (dano aplicado no instante do impacto). */
+  pendingBombs: { at: number; x: number; y: number; z: number; ownerId: number; team: Team }[] = [];
   matchEndsAt = Date.now() + MATCH_SECONDS * 1000;
   nextMatchAt = 0;
+  /** Mapa da partida atual; troca a cada partida seguindo MAP_ROTATION. */
+  mapId: MapId;
   private nextId = 1;
   private timer: ReturnType<typeof setInterval> | null = null;
+
+  /** false = só humanos (sem bots preenchendo os times). */
+  bots: boolean;
+
+  constructor(opts: { map?: MapId; bots?: boolean } = {}) {
+    this.mapId = opts.map ?? MAP_ROTATION[0];
+    this.bots = opts.bots ?? true;
+    setMap(this.mapId);
+  }
 
   start(): void {
     this.balanceBots();
@@ -44,7 +57,7 @@ export class GameManager {
       id: this.nextId++, name, team, skin, isBot: ws === null, ws,
       st: newState(0, 0, 0), yaw: 0, pitch: 0, hp: MAX_HP, alive: false, respawnAt: 0, invUntil: 0,
       kills: 0, deaths: 0, weapon: 0, ammo: WEAPONS.map((w) => w.mag), reloadUntil: 0, reloadW: 0,
-      lastShot: 0, burst: 0, streak: 0, lastDamage: 0, purring: false, queue: [], ack: 0, ping: 0, history: [],
+      lastShot: 0, burst: 0, streak: 0, airstrikes: 0, lastDamage: 0, purring: false, queue: [], ack: 0, ping: 0, history: [],
       bot: ws === null ? newBrain() : null,
     };
     this.players.set(p.id, p);
@@ -64,7 +77,7 @@ export class GameManager {
     const p = this.createPlayer(clean, team, SKINS.includes(skin) ? skin : 'laranja', ws);
     // Servidor vazio: bots ficam parados; o primeiro humano começa uma partida nova
     if (firstHuman) this.newMatch(false);
-    this.send(p, { t: 'welcome', id: p.id, team });
+    this.send(p, { t: 'welcome', id: p.id, team, map: this.mapId });
     this.broadcast({ t: 'info', msg: `${p.name} entrou no esquadrão ${team === 'orange' ? 'Laranja' : 'Preto'}` });
     this.balanceBots();
     return p;
@@ -82,7 +95,7 @@ export class GameManager {
       const all = [...this.players.values()].filter((p) => p.team === team);
       const humans = all.filter((p) => !p.isBot).length;
       const bots = all.filter((p) => p.isBot);
-      const want = Math.max(0, TEAM_SIZE - humans);
+      const want = this.bots ? Math.max(0, TEAM_SIZE - humans) : 0;
       while (bots.length > want) {
         const b = bots.pop()!;
         this.players.delete(b.id);
@@ -111,10 +124,13 @@ export class GameManager {
         this.startReload(p, msg.w);
         break;
       case 'switch':
-        if (WEAPONS[msg.w]) { p.weapon = msg.w; p.reloadUntil = 0; }
+        if (WEAPONS[msg.w] && !WEAPONS[msg.w].streak) { p.weapon = msg.w; p.reloadUntil = 0; }
         break;
       case 'radio':
         if (RADIO_LINES[msg.id]) this.broadcastTeam(p.team, { t: 'radio', from: p.name, team: p.team, id: msg.id });
+        break;
+      case 'airstrike':
+        this.callAirstrike(p, Number(msg.x), Number(msg.z));
         break;
       case 'ping':
         this.send(p, { t: 'pong', c: msg.c });
@@ -141,7 +157,7 @@ export class GameManager {
   private fire(p: Player, w: WeaponId, dx: number, dy: number, dz: number, ads: boolean, rewindTo: number): void {
     const def = WEAPONS[w];
     const now = Date.now();
-    if (!def || !p.alive || this.phase !== 'playing') return;
+    if (!def || def.streak || !p.alive || this.phase !== 'playing') return;
     const len = Math.hypot(dx, dy, dz);
     if (!Number.isFinite(len) || len < 0.5) return;
     dx /= len; dy /= len; dz /= len;
@@ -212,13 +228,59 @@ export class GameManager {
       kh: Math.max(0, Math.ceil(attacker.hp)),
       dist: Math.round(Math.hypot(attacker.st.x - victim.st.x, attacker.st.y - victim.st.y, attacker.st.z - victim.st.z)),
     });
-    // Killstreak: 3 abates sem morrer chamam o Drone Pombo (UAV)
-    if (attacker.alive) attacker.streak++;
-    if (attacker.streak > 0 && attacker.streak % UAV_STREAK === 0) {
-      this.uavUntil[attacker.team] = Date.now() + UAV_SECONDS * 1000;
-      this.broadcast({ t: 'streak', id: attacker.id, name: attacker.name, team: attacker.team, kind: 'uav', seconds: UAV_SECONDS });
+    // Killstreaks (abates do próprio bombardeio não contam, como no CoD):
+    // 3 abates → Drone Pombo (UAV); 5 abates → Bombardeio de Pombos
+    if (attacker.alive && !WEAPONS[w].streak) {
+      attacker.streak++;
+      if (attacker.streak % UAV_STREAK === 0) {
+        this.uavUntil[attacker.team] = Date.now() + UAV_SECONDS * 1000;
+        this.broadcast({ t: 'streak', id: attacker.id, name: attacker.name, team: attacker.team, kind: 'uav', seconds: UAV_SECONDS });
+      }
+      if (attacker.streak % AIRSTRIKE_STREAK === 0) {
+        attacker.airstrikes++;
+        this.broadcast({ t: 'streak', id: attacker.id, name: attacker.name, team: attacker.team, kind: 'airstrike', seconds: AIRSTRIKE.delayMs / 1000 });
+      }
     }
     if (this.score[attacker.team] >= SCORE_LIMIT) this.endMatch(attacker.team);
+  }
+
+  /**
+   * Bombardeio de Pombos: um bando cruza a sala na direção do inimigo soltando
+   * bombas numa faixa centrada no alvo. Todos recebem o aviso (dá tempo de fugir).
+   */
+  callAirstrike(p: Player, x: number, z: number): boolean {
+    if (p.airstrikes <= 0 || this.phase !== 'playing' || !Number.isFinite(x) || !Number.isFinite(z)) return false;
+    p.airstrikes--;
+    const now = Date.now();
+    const dir: [number, number] = [p.team === 'orange' ? 1 : -1, 0];
+    const points: [number, number, number, number][] = [];
+    for (let i = 0; i < AIRSTRIKE.bombs; i++) {
+      const off = (i - (AIRSTRIKE.bombs - 1) / 2) * AIRSTRIKE.spacing;
+      const bx = Math.max(ROOM.minX + 1, Math.min(ROOM.maxX - 1, x + dir[0] * off));
+      const bz = Math.max(ROOM.minZ + 1, Math.min(ROOM.maxZ - 1, z + dir[1] * off));
+      // A bomba cai do teto e para no primeiro móvel (ou no chão)
+      const by = Math.max(0, 21 - rayWorld(bx, 21, bz, 0, -1, 0, 21));
+      const delay = AIRSTRIKE.delayMs + i * AIRSTRIKE.stepMs;
+      points.push([Math.round(bx * 100) / 100, Math.round(by * 100) / 100, Math.round(bz * 100) / 100, delay]);
+      this.pendingBombs.push({ at: now + delay, x: bx, y: by, z: bz, ownerId: p.id, team: p.team });
+    }
+    this.broadcast({ t: 'airstrike', id: p.id, name: p.name, team: p.team, points, dir });
+    return true;
+  }
+
+  private explodeBombs(now: number): void {
+    const due = this.pendingBombs.filter((b) => b.at <= now);
+    if (!due.length) return;
+    this.pendingBombs = this.pendingBombs.filter((b) => b.at > now);
+    for (const b of due) {
+      const owner = this.players.get(b.ownerId);
+      if (!owner || this.phase !== 'playing') continue;
+      for (const v of this.players.values()) {
+        if (!v.alive || v.team === b.team) continue;
+        const d = Math.hypot(v.st.x - b.x, v.st.y + 0.4 - b.y, v.st.z - b.z);
+        if (d < AIRSTRIKE.radius) this.damage(owner, v, Math.round(AIRSTRIKE.damage * (1 - d / AIRSTRIKE.radius)), false, 4);
+      }
+    }
   }
 
   private spawn(p: Player): void {
@@ -257,17 +319,28 @@ export class GameManager {
     return best && best.kills > 0 ? { name: best.name, team: best.team, k: best.kills, d: best.deaths } : null;
   }
 
+  /** Troca o mapa (geometria compartilhada, spawns e navegação dos bots). */
+  changeMap(id: MapId): void {
+    if (!isMapId(id)) return;
+    this.mapId = id;
+    setMap(id);
+    for (const p of this.players.values()) if (p.isBot) p.bot = newBrain();
+  }
+
   private newMatch(announce = true): void {
+    // Partida seguinte à anterior roda no próximo mapa da rotação
+    if (announce) this.changeMap(MAP_ROTATION[(MAP_ROTATION.indexOf(this.mapId) + 1) % MAP_ROTATION.length]);
     this.phase = 'playing';
     this.score = { orange: 0, black: 0 };
     this.uavUntil = { orange: 0, black: 0 };
+    this.pendingBombs = [];
     this.matchEndsAt = Date.now() + MATCH_SECONDS * 1000;
     for (const p of this.players.values()) {
-      p.kills = 0; p.deaths = 0; p.streak = 0;
+      p.kills = 0; p.deaths = 0; p.streak = 0; p.airstrikes = 0;
       p.alive = false;
     }
     for (const p of this.players.values()) this.spawn(p);
-    if (announce) this.broadcast({ t: 'start' });
+    if (announce) this.broadcast({ t: 'start', map: this.mapId });
   }
 
   // ── Loop principal ───────────────────────────────────────────────────────
@@ -299,6 +372,8 @@ export class GameManager {
         this.simulate(p, act.cmd);
         if (act.reload) this.startReload(p, p.weapon);
         if (act.fire) this.fire(p, p.weapon, act.fire.dx, act.fire.dy, act.fire.dz, Math.random() < 0.6, now);
+        // Bot com bombardeio guardado chama no inimigo mais próximo que ele conhece
+        if (p.airstrikes > 0 && p.bot?.lastSeen && now - p.bot.lastSeen.time < 3000) this.callAirstrike(p, p.bot.lastSeen.x, p.bot.lastSeen.z);
       } else {
         // Processa os inputs acumulados (limite anti speed-hack)
         let budget = 0.12;
@@ -322,6 +397,7 @@ export class GameManager {
       if (p.purring) p.hp = Math.min(MAX_HP, p.hp + (14 / TICK_RATE));
     }
 
+    this.explodeBombs(now);
     for (const p of list) recordHistory(p, now);
     this.sendSnapshots(now, list);
   }
@@ -354,6 +430,7 @@ export class GameManager {
         me: {
           ack: p.ack, st: copyState(p.st), ammo: p.ammo.map((a) => (Number.isFinite(a) ? a : -1)),
           respawnIn: p.alive ? 0 : Math.max(0, (p.respawnAt - now) / 1000),
+          as: p.airstrikes,
         },
       });
     }

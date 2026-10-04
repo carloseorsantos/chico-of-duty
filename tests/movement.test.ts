@@ -3,7 +3,9 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CROUCH_EYE, eyeY, newState, STAND_EYE, stepPlayer, type InputCmd, type PState } from '../shared/sim.ts';
+import { MAP_ROTATION, MAPS, setMap } from '../shared/map.ts';
+import { collides, CROUCH_EYE, eyeY, newState, STAND_EYE, STAND_H, stepPlayer, type InputCmd, type PState } from '../shared/sim.ts';
+import { navPoints } from '../server/Physics.ts';
 
 const DT = 1 / 60;
 let seq = 0;
@@ -84,3 +86,50 @@ for (const r of routes) {
     assert.ok(s.y >= r.top - 0.05, `terminou em y=${s.y.toFixed(2)}, esperado ≥ ${r.top}`);
   });
 }
+
+// ── Shipment ────────────────────────────────────────────────────────────────
+
+test('mapas: todos os spawns estão livres e há malha de navegação', () => {
+  for (const id of MAP_ROTATION) {
+    setMap(id);
+    for (const sp of [...MAPS[id].spawns.orange, ...MAPS[id].spawns.black]) {
+      assert.equal(collides(sp[0], sp[1] + 0.01, sp[2], STAND_H), null, `${id}: spawn ${sp} dentro de algo`);
+    }
+    assert.ok(navPoints().length > 40, `${id}: poucos pontos de navegação`);
+  }
+  setMap('sala');
+});
+
+const shipmentRoutes: typeof routes = [
+  { name: 'chão → caixote-degrau (norte)', from: [-15, 0, -10], yaw: -Math.PI / 2, top: 1.4 },
+  { name: 'caixote → topo do contêiner (norte)', from: [-13.3, 1.4, -10], yaw: -Math.PI / 2, top: 2.6 },
+  { name: 'chão → caixote-degrau (sul)', from: [-3, 0, 10], yaw: Math.PI / 2, top: 1.4 },
+  { name: 'caixote → topo do contêiner (sul)', from: [-4.7, 1.4, 10], yaw: Math.PI / 2, top: 2.6 },
+];
+
+for (const r of shipmentRoutes) {
+  test(`Shipment — rota de escalada: ${r.name}`, () => {
+    setMap('shipment');
+    try {
+      const s = newState(...r.from);
+      hold(s, 0.1, {});
+      assert.ok(Math.abs(s.y - r.from[1]) < 0.05, `apoiado no ponto de partida (y=${s.y.toFixed(2)})`);
+      // Contêineres/caixotes são curtos: um pulo só, depois para (senão cai do outro lado)
+      hold(s, 0.55, { f: 1, jump: true, yaw: r.yaw });
+      hold(s, 0.6, { yaw: r.yaw });
+      assert.ok(s.y >= r.top - 0.05, `terminou em y=${s.y.toFixed(2)}, esperado ≥ ${r.top}`);
+    } finally { setMap('sala'); }
+  });
+}
+
+test('Shipment — dá para atravessar os contêineres abertos (meio e laterais)', () => {
+  setMap('shipment');
+  try {
+    const mid = newState(-6, 0, 0);
+    hold(mid, 1.6, { f: 1, yaw: -Math.PI / 2 });
+    assert.ok(mid.x > 4 && mid.y < 0.1, `parou em x=${mid.x.toFixed(2)} (meio)`);
+    const side = newState(-9, 0, -6);
+    hold(side, 1.6, { f: 1, yaw: Math.PI });
+    assert.ok(side.z > 4 && side.y < 0.1, `parou em z=${side.z.toFixed(2)} (lateral)`);
+  } finally { setMap('sala'); }
+});

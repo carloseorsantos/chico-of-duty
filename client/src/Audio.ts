@@ -2,10 +2,16 @@
 // proceduralmente; se existir um arquivo em /sfx/<nome>.mp3 (ex.: gerado com
 // ElevenLabs via `npm run sfx`), ele é usado no lugar da síntese.
 
+import type { WeaponId } from '../../shared/weapons.ts';
+
 export type Sfx =
   | 'rifle' | 'pump' | 'sniper' | 'melee' | 'reload' | 'rack' | 'bolt' | 'dry'
   | 'step' | 'jump' | 'land' | 'slide' | 'hit' | 'headshot' | 'kill' | 'hurt' | 'death'
-  | 'radio' | 'switch' | 'spawn' | 'win' | 'lose';
+  | 'radio' | 'switch' | 'spawn' | 'win' | 'lose'
+  | 'boom' | 'whistle' | 'coo' | 'flap';
+
+/** Som do disparo de cada arma (o bombardeio não dispara: o som vem do bando de pombos). */
+export const WEAPON_SFX: Record<WeaponId, Sfx | null> = { 0: 'rifle', 1: 'pump', 2: 'sniper', 3: 'melee', 4: null };
 
 const SAMPLE_NAMES: string[] = [
   'rifle', 'pump', 'sniper', 'melee', 'reload', 'hurt', 'death',
@@ -240,6 +246,34 @@ export class GameAudio {
     this.tone(d, t, 0.05, 2200, 1500, 0.2, 'square');
     this.noiseBurst(d, t + 0.12, 0.09, 1800, 4, 0.5, 'bandpass');
     this.tone(d, t + 0.3, 0.05, 2600, 1900, 0.2, 'square');
+  }
+
+  // ── Bombardeio de Pombos ──────────────────────────────────────────────────
+
+  s_boom(d: AudioNode): void {
+    const t = this.now;
+    this.noiseBurst(d, t, 1.4, 900, 0.5, 1.4);
+    this.noiseBurst(d, t, 0.25, 4000, 0.6, 0.7);
+    this.tone(d, t, 0.9, 85, 28, 1.4, 'sine');
+    this.noiseBurst(d, t + 0.2, 1.6, 300, 0.4, 0.5); // eco/estrondo
+  }
+
+  s_whistle(d: AudioNode): void {
+    this.tone(d, this.now, 0.75, 1900, 650, 0.12, 'sine');
+  }
+
+  s_coo(d: AudioNode): void {
+    // Arrulho: dois "uuu" graves com vibrato
+    const t = this.now;
+    for (const [dt, f] of [[0, 330], [0.32, 290]] as const) {
+      this.tone(d, t + dt, 0.28, f, f * 0.82, 0.25, 'triangle');
+      this.tone(d, t + dt, 0.28, f * 1.5, f * 1.2, 0.06, 'sine');
+    }
+  }
+
+  s_flap(d: AudioNode): void {
+    const t = this.now;
+    for (let i = 0; i < 10; i++) this.noiseBurst(d, t + i * 0.09 + Math.random() * 0.02, 0.06, 900 + Math.random() * 600, 1.5, 0.35, 'bandpass');
   }
 
   s_dry(d: AudioNode): void {

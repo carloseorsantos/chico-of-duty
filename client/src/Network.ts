@@ -27,7 +27,10 @@ export class Network {
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const ws = new WebSocket(`${proto}://${location.host}/ws`);
+      // VITE_WS_URL aponta para um servidor de jogo hospedado fora (ex.: site na Vercel +
+      // servidor no Render/Railway). Sem ela, usa o mesmo host da página.
+      const url = import.meta.env.VITE_WS_URL || `${proto}://${location.host}/ws`;
+      const ws = new WebSocket(url);
       this.ws = ws;
       ws.onopen = () => { this.connected = true; resolve(); };
       ws.onerror = () => reject(new Error('Não foi possível conectar ao servidor'));

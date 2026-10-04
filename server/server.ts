@@ -7,6 +7,7 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { ClientMsg } from '../shared/types.ts';
+import { isMapId } from '../shared/map.ts';
 import { GameManager } from './GameManager.ts';
 import type { Player } from './types.ts';
 
@@ -30,7 +31,8 @@ const http = createServer((req, res) => {
   createReadStream(file).pipe(res);
 });
 
-const game = new GameManager();
+// MAP=shipment começa no Shipment (depois segue a rotação normal); BOTS=0 desliga os bots
+const game = new GameManager({ map: isMapId(process.env.MAP) ? process.env.MAP : undefined, bots: process.env.BOTS !== '0' });
 const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: 64 * 1024 });
 
 wss.on('connection', (ws: WebSocket) => {
